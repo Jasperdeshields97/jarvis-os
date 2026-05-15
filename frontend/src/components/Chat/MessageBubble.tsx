@@ -9,6 +9,7 @@ import { Copy, Check } from 'lucide-react';
 import { AudioPlayer } from './AudioPlayer';
 import { ToolCallCard } from './ToolCallCard';
 import { ResearchTimeline } from './ResearchTimeline';
+import { rehypeCitations } from '../../lib/rehype-citations';
 import { XRayFooter } from './XRayFooter';
 import type { ChatMessage } from '../../types';
 
@@ -123,6 +124,22 @@ export function MessageBubble({ message, isLive = false }: Props) {
 
   const cleanContent = useMemo(() => stripThinkTags(message.content), [message.content]);
 
+  // Build a ref→source lookup once per render. Memoized so the rehype plugin
+  // identity stays stable until the source list actually changes.
+  const sourcesMap = useMemo(() => {
+    const m = new Map<number, NonNullable<ChatMessage['researchSources']>[number]>();
+    for (const s of message.researchSources ?? []) {
+      if (typeof s.ref === 'number') m.set(s.ref, s);
+    }
+    return m;
+  }, [message.researchSources]);
+
+  const rehypePlugins = useMemo(() => {
+    const base: any[] = [[rehypeHighlight, { detect: true }], rehypeKatex];
+    if (sourcesMap.size > 0) base.push([rehypeCitations, { sources: sourcesMap }]);
+    return base;
+  }, [sourcesMap]);
+
   return (
     <div className="group mb-6">
       {/* Deep Research timeline (steps + status) */}
@@ -151,7 +168,7 @@ export function MessageBubble({ message, isLive = false }: Props) {
         <div className="prose max-w-none">
           <ReactMarkdown
             remarkPlugins={[remarkGfm, remarkMath]}
-            rehypePlugins={[[rehypeHighlight, { detect: true }], rehypeKatex]}
+            rehypePlugins={rehypePlugins}
             components={{
               pre: CodeBlockPre,
             }}

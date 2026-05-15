@@ -66,6 +66,14 @@ export interface TimeRange {
   end?: string;
 }
 
+export interface ResearchSource {
+  ref: number;
+  title?: string;
+  sender?: string;
+  date?: string;
+  url?: string;
+}
+
 export interface ResearchSearchTrace {
   id: string;
   query: string;
@@ -85,9 +93,14 @@ export type ResearchEvent =
         time_range?: TimeRange | string;
       };
     }
-  | { type: 'search_result'; num_hits: number; top_titles?: string[] }
+  | {
+      type: 'search_result';
+      num_hits: number;
+      top_titles?: string[];
+      sources?: ResearchSource[];
+    }
   | { type: 'synthesis'; text: string }
-  | { type: 'done' };
+  | { type: 'done'; usage?: TokenUsage };
 
 export interface ChatMessage {
   id: string;
@@ -96,6 +109,7 @@ export interface ChatMessage {
   timestamp: number;
   toolCalls?: ToolCallInfo[];
   researchTraces?: ResearchSearchTrace[];
+  researchSources?: ResearchSource[];
   isResearch?: boolean;
   usage?: TokenUsage;
   telemetry?: MessageTelemetry;

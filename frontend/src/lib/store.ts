@@ -6,6 +6,7 @@ import type {
   ModelInfo,
   MessageTelemetry,
   ResearchSearchTrace,
+  ResearchSource,
   SavingsData,
   ServerInfo,
   StreamState,
@@ -160,6 +161,7 @@ interface AppState {
     telemetry?: MessageTelemetry,
     audio?: { url: string },
     researchTraces?: ResearchSearchTrace[],
+    researchSources?: ResearchSource[],
   ) => void;
   setStreamState: (state: Partial<StreamState>) => void;
   resetStream: () => void;
@@ -388,6 +390,7 @@ export const useAppStore = create<AppState>((set, get) => {
       telemetry?: MessageTelemetry,
       audio?: { url: string },
       researchTraces?: ResearchSearchTrace[],
+      researchSources?: ResearchSource[],
     ) => {
       const store = loadConversations();
       const conv = store.conversations[conversationId];
@@ -400,6 +403,7 @@ export const useAppStore = create<AppState>((set, get) => {
         if (telemetry) lastMsg.telemetry = telemetry;
         if (audio) lastMsg.audio = audio;
         if (researchTraces) lastMsg.researchTraces = researchTraces;
+        if (researchSources) lastMsg.researchSources = researchSources;
         conv.updatedAt = Date.now();
         saveConversations(store);
         set({ messages: [...conv.messages] });

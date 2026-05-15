@@ -9,6 +9,7 @@ import type {
   ChatMessage,
   MessageTelemetry,
   ResearchSearchTrace,
+  ResearchSource,
   TokenUsage,
   ToolCallInfo,
 } from '../../types';
@@ -141,6 +142,9 @@ export function InputArea() {
     let complexity: { score: number; tier: string; suggested_max_tokens: number } | undefined;
     const toolCalls: ToolCallInfo[] = [];
     const researchTraces: ResearchSearchTrace[] = [];
+    const researchSourcesByRef = new Map<number, ResearchSource>();
+    const flushSources = () =>
+      Array.from(researchSourcesByRef.values()).sort((a, b) => a.ref - b.ref);
     let lastFlush = 0;
     let ttftMs: number | undefined;
 
@@ -181,6 +185,7 @@ export function InputArea() {
               undefined,
               undefined,
               [...researchTraces],
+              flushSources(),
             );
             useAppStore.getState().addLogEntry({
               timestamp: Date.now(),
@@ -195,6 +200,13 @@ export function InputArea() {
               pending.numHits = ev.num_hits;
               pending.topTitles = ev.top_titles;
             }
+            if (ev.sources) {
+              for (const src of ev.sources) {
+                if (src && typeof src.ref === 'number' && !researchSourcesByRef.has(src.ref)) {
+                  researchSourcesByRef.set(src.ref, src);
+                }
+              }
+            }
             updateLastAssistant(
               convId,
               accumulatedContent,
@@ -203,6 +215,7 @@ export function InputArea() {
               undefined,
               undefined,
               [...researchTraces],
+              flushSources(),
             );
           } else if (ev.type === 'synthesis') {
             if (!ttftMs) ttftMs = Date.now() - startTime;
@@ -218,10 +231,21 @@ export function InputArea() {
                 undefined,
                 undefined,
                 [...researchTraces],
+                flushSources(),
               );
               lastFlush = now;
             }
           } else if (ev.type === 'done') {
+            if (ev.usage) {
+              usage = {
+                prompt_tokens: ev.usage.prompt_tokens ?? 0,
+                completion_tokens: ev.usage.completion_tokens ?? 0,
+                total_tokens:
+                  ev.usage.total_tokens ??
+                  (ev.usage.prompt_tokens ?? 0) +
+                    (ev.usage.completion_tokens ?? 0),
+              };
+            }
             break;
           }
         }
@@ -357,6 +381,7 @@ export function InputArea() {
         telemetry,
         audioMeta,
         researchTraces.length > 0 ? researchTraces : undefined,
+        researchSourcesByRef.size > 0 ? flushSources() : undefined,
       );
       if (timerRef.current) {
         clearInterval(timerRef.current);

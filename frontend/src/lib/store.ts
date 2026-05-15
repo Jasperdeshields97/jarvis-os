@@ -176,6 +176,7 @@ interface AppState {
   setSelectedModel: (model: string) => void;
   setServerInfo: (info: ServerInfo | null) => void;
   setSavings: (data: SavingsData | null) => void;
+  incrementSavings: (usage: TokenUsage) => void;
 
   // Actions: settings
   updateSettings: (partial: Partial<Settings>) => void;
@@ -429,6 +430,23 @@ export const useAppStore = create<AppState>((set, get) => {
     setSelectedModel: (model: string) => set({ selectedModel: model }),
     setServerInfo: (info: ServerInfo | null) => set({ serverInfo: info }),
     setSavings: (data: SavingsData | null) => set({ savings: data }),
+    incrementSavings: (usage: TokenUsage) => {
+      const cur = get().savings;
+      const prompt = usage.prompt_tokens ?? 0;
+      const completion = usage.completion_tokens ?? 0;
+      const total = usage.total_tokens ?? prompt + completion;
+      set({
+        savings: {
+          total_calls: (cur?.total_calls ?? 0) + 1,
+          total_prompt_tokens: (cur?.total_prompt_tokens ?? 0) + prompt,
+          total_completion_tokens: (cur?.total_completion_tokens ?? 0) + completion,
+          total_tokens: (cur?.total_tokens ?? 0) + total,
+          local_cost: cur?.local_cost ?? 0,
+          per_provider: cur?.per_provider ?? [],
+          token_counting_version: cur?.token_counting_version,
+        },
+      });
+    },
 
     cachedConnectors: null,
     setCachedConnectors: (list) => set({ cachedConnectors: list }),

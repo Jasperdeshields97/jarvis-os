@@ -245,6 +245,11 @@ export function InputArea() {
                   (ev.usage.prompt_tokens ?? 0) +
                     (ev.usage.completion_tokens ?? 0),
               };
+              // Optimistically roll this research turn into the session
+              // counters so the Session panel updates the moment the
+              // stream finishes, regardless of how /v1/savings aggregates
+              // research telemetry server-side.
+              useAppStore.getState().incrementSavings(usage);
             }
             break;
           }
@@ -394,9 +399,15 @@ export function InputArea() {
       });
       abortRef.current = null;
 
-      fetchSavings()
-        .then((data) => useAppStore.getState().setSavings(data))
-        .catch(() => {});
+      // Research path updates session counters optimistically from the
+      // `done` event's usage payload — re-fetching here would overwrite
+      // it with a potentially stale snapshot if the server's research
+      // telemetry hasn't been merged into /v1/savings yet.
+      if (!deepResearch) {
+        fetchSavings()
+          .then((data) => useAppStore.getState().setSavings(data))
+          .catch(() => {});
+      }
     }
   }, [
     input,

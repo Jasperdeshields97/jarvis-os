@@ -10,10 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [1.0.0] - 2026-05-15
 
-First public release of OpenJarvis. The five-primitive architecture
-(Intelligence, Engine, Agents, Tools & Memory, Learning) is now stable,
-with efficiency and on-device learning as first-class capabilities
-alongside accuracy. Companion blog post:
+The five-primitive architecture (Intelligence, Engine, Agents,
+Tools & Memory, Learning) is now stable, with efficiency and
+on-device learning as first-class capabilities alongside accuracy.
+Companion blog post:
 [From Minions to OpenJarvis: A Retrospective on Two Years in Local AI](https://hazyresearch.stanford.edu/blog/2026-05-19-minions-to-openjarvis-retrospective).
 
 ### Highlights

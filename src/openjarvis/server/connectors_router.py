@@ -470,8 +470,31 @@ def create_connectors_router():
                 "status": "already_syncing",
             }
 
+        # Snapshot the checkpoint's items_synced before this run starts so
+        # the GET handler can compute how many of the total are "new this
+        # run" vs. carried over from prior syncs. We do this in the request
+        # thread (not the background worker) so the baseline is in place
+        # before the first poll lands.
+        baseline_items = 0
+        try:
+            from openjarvis.connectors.pipeline import IngestionPipeline
+            from openjarvis.connectors.store import KnowledgeStore
+            from openjarvis.connectors.sync_engine import SyncEngine
+
+            cp = SyncEngine(
+                pipeline=IngestionPipeline(store=KnowledgeStore()),
+            ).get_checkpoint(connector_id)
+            if cp and cp.get("items_synced") is not None:
+                baseline_items = int(cp["items_synced"])
+        except Exception:  # noqa: BLE001
+            baseline_items = 0
+
         # Mark as syncing immediately so the UI picks it up
-        _sync_state[connector_id] = {"state": "syncing", "error": None}
+        _sync_state[connector_id] = {
+            "state": "syncing",
+            "error": None,
+            "baseline_items": baseline_items,
+        }
 
         def _run_sync() -> None:
             try:
@@ -484,7 +507,11 @@ def create_connectors_router():
                 engine = SyncEngine(pipeline=pipeline)
                 engine.sync(inst)
                 logger.info("Sync completed for %s", connector_id)
-                _sync_state[connector_id] = {"state": "complete", "error": None}
+                _sync_state[connector_id] = {
+                    "state": "complete",
+                    "error": None,
+                    "baseline_items": baseline_items,
+                }
             except Exception as exc:
                 error_msg = str(exc)
                 if "401" in error_msg or "Unauthorized" in error_msg:
@@ -496,7 +523,11 @@ def create_connectors_router():
                 elif "timeout" in error_msg.lower():
                     error_msg = "Connection timed out."
                 logger.error("Sync failed for %s: %s", connector_id, error_msg)
-                _sync_state[connector_id] = {"state": "error", "error": error_msg}
+                _sync_state[connector_id] = {
+                    "state": "error",
+                    "error": error_msg,
+                    "baseline_items": baseline_items,
+                }
 
         t = threading.Thread(target=_run_sync, daemon=True)
         t.start()
@@ -545,9 +576,15 @@ def create_connectors_router():
         except Exception:  # noqa: BLE001
             checkpoint = None
 
-        items_synced = status.items_synced or (
-            int(checkpoint["items_synced"]) if checkpoint else 0
-        )
+        # Prefer the checkpoint's items_synced — it is the running cumulative
+        # total across every sync this connector has ever run. The connector
+        # instance's own counter only tracks what *this* in-memory run has
+        # processed, so after a fresh sync of 30 new emails the connector
+        # reports 30 while the checkpoint reflects the correct 8,626 total.
+        if checkpoint and checkpoint.get("items_synced") is not None:
+            items_synced = int(checkpoint["items_synced"])
+        else:
+            items_synced = status.items_synced
         items_total = status.items_total
         if not items_total and checkpoint:
             # If the connector doesn't track total separately, surface the
@@ -577,11 +614,21 @@ def create_connectors_router():
             status.error or bg.get("error") or (checkpoint or {}).get("error")
         )
 
+        # Items processed during the *current* (or just-finished) run = total
+        # minus the baseline captured when this sync was kicked off. This
+        # lets the UI surface "30 new emails (8,623 total indexed)" without
+        # the client having to track its own baseline.
+        baseline_items = bg.get("baseline_items")
+        new_items_synced: Optional[int] = None
+        if isinstance(baseline_items, int):
+            new_items_synced = max(0, items_synced - baseline_items)
+
         return {
             "connector_id": connector_id,
             "state": effective_state,
             "items_synced": items_synced,
             "items_total": items_total,
+            "new_items_synced": new_items_synced,
             "last_sync": last_sync_str,
             "error": effective_error,
         }

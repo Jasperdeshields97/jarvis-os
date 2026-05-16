@@ -400,6 +400,25 @@ function formatEta(seconds: number): string | null {
   return 'more than a day remaining';
 }
 
+function formatTimeAgo(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  const diffSec = (Date.now() - t) / 1000;
+  if (diffSec < 30) return 'just now';
+  if (diffSec < 60) return 'less than a min ago';
+  if (diffSec < 3600) {
+    const m = Math.round(diffSec / 60);
+    return `${m} min${m === 1 ? '' : 's'} ago`;
+  }
+  if (diffSec < 86400) {
+    const h = Math.round(diffSec / 3600);
+    return `${h} hr${h === 1 ? '' : 's'} ago`;
+  }
+  const d = Math.round(diffSec / 86400);
+  return `${d} day${d === 1 ? '' : 's'} ago`;
+}
+
 function SyncStatusDisplay({
   chunks,
   sync,
@@ -467,13 +486,84 @@ function SyncStatusDisplay({
     );
   }
 
-  // Done — has chunks
-  if (chunks > 0) {
+  // Treat the SyncEngine's checkpointed items_synced as the source of
+  // truth for "total indexed" — `chunks` from listConnectors counts
+  // embedding chunks (often != source items) and the checkpoint is what
+  // both the syncing and idle branches need to display consistently.
+  const totalIndexed = sync?.items_synced ?? chunks;
+  const newThisRun = sync?.new_items_synced ?? null;
+
+  // Actively syncing
+  if (sync?.state === 'syncing' || syncing) {
+    const itemsTotal = sync?.items_total ?? 0;
+    // Progress is measured against this-run delta vs. the new-items target,
+    // not against the cumulative total (which would always read as ~100%).
+    const runProgress = itemsTotal > 0 && newThisRun != null
+      ? Math.min(100, Math.round((newThisRun / itemsTotal) * 100))
+      : null;
+
+    // Project remaining time from items/sec since we first observed the
+    // sync running. Require ≥5s of observation and a positive delta so
+    // we don't surface a nonsense ETA in the first few seconds.
+    let etaLabel: string | null = null;
+    if (baselineRef.current && itemsTotal > 0 && newThisRun != null) {
+      const elapsedSec = (Date.now() - baselineRef.current.ts) / 1000;
+      const delta = totalIndexed - baselineRef.current.items;
+      if (elapsedSec > 5 && delta > 0) {
+        const rate = delta / elapsedSec;
+        const remaining = Math.max(0, itemsTotal - newThisRun);
+        etaLabel = formatEta(remaining / rate);
+      }
+    }
+
+    const newCount = newThisRun ?? 0;
+    return (
+      <div>
+        <div style={{ fontSize: 11, color: 'var(--color-warning)', marginBottom: 4 }}>
+          Syncing —{' '}
+          <span key={newCount} className="sync-bump">
+            {newCount.toLocaleString()} new {unitLabel}
+          </span>
+          <span style={{ color: 'var(--color-text-tertiary)' }}>
+            {' '}({totalIndexed.toLocaleString()} total indexed)
+          </span>
+          {etaLabel && (
+            <span style={{ color: 'var(--color-text-tertiary)' }}> · {etaLabel}</span>
+          )}
+        </div>
+        <div style={{
+          height: 4, borderRadius: 2,
+          background: 'var(--color-bg-tertiary)',
+          overflow: 'hidden',
+        }}>
+          <div style={{
+            height: '100%', borderRadius: 2,
+            background: 'var(--color-warning)',
+            width: runProgress != null ? `${runProgress}%` : '30%',
+            transition: 'width 0.5s ease',
+            animationName: runProgress == null ? 'pulse' : undefined,
+            animationDuration: runProgress == null ? '1.5s' : undefined,
+            animationIterationCount: runProgress == null ? 'infinite' : undefined,
+          }} />
+        </div>
+      </div>
+    );
+  }
+
+  // Idle — already has indexed items: show the corpus size + how long ago
+  // we last refreshed it, with a small Re-sync affordance.
+  if (totalIndexed > 0) {
+    const lastSyncLabel = formatTimeAgo(sync?.last_sync);
     return (
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 12, color: 'var(--color-success)' }}>
-            {chunks.toLocaleString()} {unitLabel}
+            {totalIndexed.toLocaleString()} {unitLabel}
+            {lastSyncLabel && (
+              <span style={{ color: 'var(--color-text-tertiary)' }}>
+                {' · '}Last synced {lastSyncLabel}
+              </span>
+            )}
           </span>
           <button
             onClick={handleSync}
@@ -496,93 +586,14 @@ function SyncStatusDisplay({
     );
   }
 
-  // Actively syncing
-  if (sync?.state === 'syncing' || syncing) {
-    const hasTotal = !!(sync?.items_total && sync.items_total > 0);
-    const itemsSynced = sync?.items_synced ?? 0;
-    const itemsTotal = sync?.items_total ?? 0;
-    const pct = hasTotal ? Math.round((itemsSynced / itemsTotal) * 100) : null;
-
-    // Project remaining time using items/sec since we first observed this
-    // sync running. Require at least 5s of observation and a non-zero
-    // delta so we don't surface a nonsense ETA in the first few seconds.
-    let etaLabel: string | null = null;
-    if (hasTotal && baselineRef.current) {
-      const elapsedSec = (Date.now() - baselineRef.current.ts) / 1000;
-      const delta = itemsSynced - baselineRef.current.items;
-      if (elapsedSec > 5 && delta > 0) {
-        const rate = delta / elapsedSec;
-        const remaining = Math.max(0, itemsTotal - itemsSynced);
-        etaLabel = formatEta(remaining / rate);
-      }
-    }
-
-    const countPart = hasTotal
-      ? `${itemsSynced.toLocaleString()} / ${itemsTotal.toLocaleString()}${pct != null ? ` (${pct}%)` : ''}`
-      : itemsSynced > 0
-        ? `${itemsSynced.toLocaleString()} items so far`
-        : 'Starting...';
-
-    return (
-      <div>
-        <div style={{ fontSize: 11, color: 'var(--color-warning)', marginBottom: 4 }}>
-          Syncing —{' '}
-          <span key={itemsSynced} className="sync-bump">
-            {countPart}
-          </span>
-          {etaLabel && (
-            <span style={{ color: 'var(--color-text-tertiary)' }}> · {etaLabel}</span>
-          )}
-        </div>
-        <div style={{
-          height: 4, borderRadius: 2,
-          background: 'var(--color-bg-tertiary)',
-          overflow: 'hidden',
-        }}>
-          <div style={{
-            height: '100%', borderRadius: 2,
-            background: 'var(--color-warning)',
-            width: pct != null ? `${pct}%` : '30%',
-            transition: 'width 0.5s ease',
-            animationName: pct == null ? 'pulse' : undefined,
-            animationDuration: pct == null ? '1.5s' : undefined,
-            animationIterationCount: pct == null ? 'infinite' : undefined,
-          }} />
-        </div>
-      </div>
-    );
-  }
-
-  // Idle with items synced but no chunks yet (indexing)
-  if (sync?.state === 'idle' && sync.items_synced > 0) {
-    return (
-      <div>
-        <div style={{ fontSize: 11, color: 'var(--color-warning)', marginBottom: 4 }}>
-          Indexing {sync.items_synced.toLocaleString()} items...
-        </div>
-        <div style={{
-          height: 4, borderRadius: 2,
-          background: 'var(--color-bg-tertiary)',
-          overflow: 'hidden',
-        }}>
-          <div style={{
-            height: '100%', borderRadius: 2, background: 'var(--color-warning)',
-            width: '60%',
-            animationName: 'pulse', animationDuration: '1.5s', animationIterationCount: 'infinite',
-          }} />
-        </div>
-      </div>
-    );
-  }
-
-  // Connected but no chunks yet
+  // Connected but nothing ever ingested. Mirror the original copy.
   const hasSynced = sync?.last_sync != null;
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
           {hasSynced
-            ? 'Synced — 0 items found'
+            ? `Synced — 0 ${unitLabel} found`
             : 'Connected — not synced yet'}
         </span>
         <button

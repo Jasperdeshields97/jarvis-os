@@ -36,6 +36,9 @@ export interface SyncStatus {
   state: "idle" | "syncing" | "paused" | "error";
   items_synced: number;
   items_total: number;
+  /** Items processed in the current (or most recent) run only. `null`
+   *  when no sync has been triggered through this server session yet. */
+  new_items_synced?: number | null;
   last_sync: string | null;
   error: string | null;
 }

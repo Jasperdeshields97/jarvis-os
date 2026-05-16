@@ -527,6 +527,41 @@ def create_connectors_router():
         bg_thread = _sync_threads.get(connector_id)
         is_bg_running = bg_thread is not None and bg_thread.is_alive()
 
+        # Fall back to the SyncEngine's persistent checkpoint for items_synced
+        # and last_sync. The connector's own sync_status() only reflects state
+        # accumulated since the current connector instance was created, so a
+        # fresh process / fresh `_get_or_create` flips back to zeros even when
+        # tens of thousands of items have already been ingested historically.
+        # The checkpoint table is the source of truth.
+        checkpoint: Optional[Dict[str, Any]] = None
+        try:
+            from openjarvis.connectors.pipeline import IngestionPipeline
+            from openjarvis.connectors.store import KnowledgeStore
+            from openjarvis.connectors.sync_engine import SyncEngine
+
+            checkpoint = SyncEngine(
+                pipeline=IngestionPipeline(store=KnowledgeStore()),
+            ).get_checkpoint(connector_id)
+        except Exception:  # noqa: BLE001
+            checkpoint = None
+
+        items_synced = status.items_synced or (
+            int(checkpoint["items_synced"]) if checkpoint else 0
+        )
+        items_total = status.items_total
+        if not items_total and checkpoint:
+            # If the connector doesn't track total separately, surface the
+            # checkpointed count as the "total so far" so the UI shows real
+            # progress instead of a 0 / 0 placeholder.
+            items_total = items_synced
+        last_sync_str: Optional[str]
+        if status.last_sync:
+            last_sync_str = status.last_sync.isoformat()
+        elif checkpoint and checkpoint.get("last_sync"):
+            last_sync_str = checkpoint["last_sync"]
+        else:
+            last_sync_str = None
+
         # Determine effective state
         if is_bg_running:
             effective_state = "syncing"
@@ -538,14 +573,16 @@ def create_connectors_router():
             effective_state = status.state
 
         # Use the bg error if the connector doesn't have one
-        effective_error = status.error or bg.get("error")
+        effective_error = (
+            status.error or bg.get("error") or (checkpoint or {}).get("error")
+        )
 
         return {
             "connector_id": connector_id,
             "state": effective_state,
-            "items_synced": status.items_synced,
-            "items_total": status.items_total,
-            "last_sync": (status.last_sync.isoformat() if status.last_sync else None),
+            "items_synced": items_synced,
+            "items_total": items_total,
+            "last_sync": last_sync_str,
             "error": effective_error,
         }
 

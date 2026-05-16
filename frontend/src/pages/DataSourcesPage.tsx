@@ -24,7 +24,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { SOURCE_CATALOG } from '../types/connectors';
 import type { ConnectRequest } from '../types/connectors';
-import { listConnectors, connectSource, getSyncStatus, triggerSync } from '../lib/connectors-api';
+import { listConnectors, connectSource, disconnectSource, getSyncStatus, triggerSync } from '../lib/connectors-api';
 import type { SyncStatus } from '../types/connectors';
 
 // ---------------------------------------------------------------------------
@@ -312,6 +312,81 @@ const IconFor = ({ id, size = 18 }: { id: string; size?: number }) => {
   return <Ico size={size} />;
 };
 
+// The Gmail card unifies the OAuth (`gmail`) and IMAP (`gmail_imap`) backend
+// connectors — both should resolve to the gmail_imap catalog entry so the
+// connected card shows the same name, unit label, and troubleshooting tips
+// regardless of which underlying flow the user picked.
+function metaFor(connectorId: string) {
+  const id = connectorId === 'gmail' ? 'gmail_imap' : connectorId;
+  return SOURCE_CATALOG.find((s) => s.connector_id === id);
+}
+
+// Advanced OAuth disclosure for the unified Gmail card. Hidden by default;
+// expands to a Client ID + Client Secret form that POSTs to the OAuth
+// `gmail` backend connector. Lives here rather than in SOURCE_CATALOG
+// because the Gmail card is the only one with a dual-flow shape.
+function GmailOAuthAdvanced({
+  loading,
+  onConnect,
+}: {
+  loading: boolean;
+  onConnect: (req: ConnectRequest) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ marginTop: 12 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          background: 'transparent',
+          border: 'none',
+          padding: 0,
+          fontSize: 11,
+          color: 'var(--color-text-tertiary)',
+          cursor: 'pointer',
+          textDecoration: 'underline',
+        }}
+      >
+        {open ? 'Hide advanced' : 'Advanced: Connect with Google OAuth'}
+      </button>
+      {open && (
+        <div
+          style={{
+            marginTop: 8,
+            padding: 10,
+            background: 'var(--color-bg)',
+            border: '1px solid var(--color-border)',
+            borderRadius: 6,
+          }}
+        >
+          <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginBottom: 8 }}>
+            For developers with an existing Google Cloud project. Enable the
+            Gmail API and create a Desktop OAuth client at{' '}
+            <a
+              href="https://console.cloud.google.com/apis/credentials"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: 'var(--color-accent)', textDecoration: 'underline' }}
+            >
+              Google Cloud Credentials →
+            </a>{' '}
+            then paste the Client ID and Client Secret below.
+          </div>
+          <InlineConnectForm
+            fields={[
+              { name: 'email', placeholder: 'Client ID', type: 'text' },
+              { name: 'password', placeholder: 'Client Secret', type: 'password' },
+            ]}
+            loading={loading}
+            onSubmit={onConnect}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Data Sources section
 // ---------------------------------------------------------------------------
@@ -546,6 +621,21 @@ function DataSourcesSection() {
   const [connectingId, setConnectingId] = useState<string | null>(null);
   const [connectStage, setConnectStage] = useState<string>('');
   const [connectError, setConnectError] = useState<string>('');
+  const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
+
+  const handleDisconnect = async (id: string) => {
+    if (disconnectingId) return;
+    setDisconnectingId(id);
+    try {
+      await disconnectSource(id);
+      loadConnectors();
+    } catch {
+      // Surface failures silently — the connector list will refresh on the
+      // next poll and reflect the true state regardless.
+    } finally {
+      setDisconnectingId(null);
+    }
+  };
 
   const handleConnect = async (id: string, req: ConnectRequest) => {
     setLoading(true);
@@ -598,8 +688,32 @@ function DataSourcesSection() {
     }
   };
 
-  const connected = connectors.filter((c) => c.connected);
-  const notConnectedBase = connectors.filter((c) => !c.connected);
+  // Merge the OAuth Gmail (`gmail`) and IMAP Gmail (`gmail_imap`) backend
+  // connectors into a single user-facing Gmail card. IMAP is the default
+  // flow (no Google Cloud setup needed); OAuth lives behind an "Advanced"
+  // disclosure when the card is expanded. If both happen to be connected,
+  // keep whichever has more indexed chunks so the active source still
+  // surfaces its sync state.
+  const unifiedConnectors = (() => {
+    const gmail = connectors.find((c) => c.connector_id === 'gmail');
+    const gmailImap = connectors.find((c) => c.connector_id === 'gmail_imap');
+    if (!gmail || !gmailImap) return connectors;
+    if (gmail.connected && !gmailImap.connected) {
+      return connectors.filter((c) => c.connector_id !== 'gmail_imap');
+    }
+    if (gmailImap.connected && !gmail.connected) {
+      return connectors.filter((c) => c.connector_id !== 'gmail');
+    }
+    if (gmail.connected && gmailImap.connected) {
+      const dropId = gmail.chunks >= gmailImap.chunks ? 'gmail_imap' : 'gmail';
+      return connectors.filter((c) => c.connector_id !== dropId);
+    }
+    // Neither connected — show only the IMAP card as the default flow.
+    return connectors.filter((c) => c.connector_id !== 'gmail');
+  })();
+
+  const connected = unifiedConnectors.filter((c) => c.connected);
+  const notConnectedBase = unifiedConnectors.filter((c) => !c.connected);
   // Always show the upload card in the not-connected list (it has no backend connector)
   const uploadEntry = { connector_id: 'upload', display_name: 'Upload / Paste', connected: false, chunks: 0 };
   const notConnected = notConnectedBase.some((c) => c.connector_id === 'upload')
@@ -642,10 +756,9 @@ function DataSourcesSection() {
           </div>
           <div className="flex flex-col gap-2">
           {connected.map((c) => {
-            const meta = SOURCE_CATALOG.find(s => s.connector_id === c.connector_id);
+            const meta = metaFor(c.connector_id);
             const unit = meta?.unitLabel || 'items';
             const sync = syncStatuses[c.connector_id];
-            const isReconnecting = expandedId === c.connector_id;
             const hasError = !!sync?.error;
             return (
               <div
@@ -674,60 +787,23 @@ function DataSourcesSection() {
                     />
                   </div>
                   <button
-                    onClick={() => setExpandedId(isReconnecting ? null : c.connector_id)}
+                    onClick={() => handleDisconnect(c.connector_id)}
+                    disabled={disconnectingId === c.connector_id}
                     className="hud-label"
                     style={{
                       padding: '6px 12px',
                       background: 'transparent',
                       color: 'var(--color-text-secondary)',
                       border: '1px solid var(--color-border)',
-                      borderRadius: 4, cursor: 'pointer',
+                      borderRadius: 4,
+                      cursor: disconnectingId === c.connector_id ? 'default' : 'pointer',
                       letterSpacing: '0.15em',
+                      opacity: disconnectingId === c.connector_id ? 0.5 : 1,
                     }}
                   >
-                    {isReconnecting ? 'Cancel' : 'Reconnect'}
+                    {disconnectingId === c.connector_id ? 'Disconnecting…' : 'Disconnect'}
                   </button>
                 </div>
-                {isReconnecting && meta?.steps && (
-                  <div style={{ borderTop: '1px solid var(--color-border)', padding: 12 }}>
-                    <div style={{ fontSize: 12, color: 'var(--color-warning)', marginBottom: 8 }}>
-                      Re-enter credentials to reconnect this source.
-                    </div>
-                    {meta.steps.map((step, i) => (
-                      <div
-                        key={i}
-                        style={{
-                          background: 'var(--color-bg)',
-                          border: '1px solid var(--color-border)',
-                          borderRadius: 6, padding: 10,
-                          marginBottom: 8,
-                        }}
-                      >
-                        <div style={{ color: 'var(--color-accent-purple)', fontSize: 10, fontWeight: 600, marginBottom: 3 }}>
-                          STEP {i + 1}
-                        </div>
-                        <div style={{ fontSize: 12, marginBottom: step.url ? 4 : 0 }}>{step.label}</div>
-                        {step.url && (
-                          <a
-                            href={step.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{ color: 'var(--color-accent)', fontSize: 11, textDecoration: 'underline' }}
-                          >
-                            {step.urlLabel || 'Open'} &rarr;
-                          </a>
-                        )}
-                      </div>
-                    ))}
-                    {meta.inputFields && (
-                      <InlineConnectForm
-                        fields={meta.inputFields}
-                        loading={loading}
-                        onSubmit={(req) => handleConnect(c.connector_id, req)}
-                      />
-                    )}
-                  </div>
-                )}
               </div>
             );
           })}
@@ -744,7 +820,7 @@ function DataSourcesSection() {
           </div>
           <div className="grid grid-cols-2 gap-2">
           {notConnected.map((c) => {
-            const meta = SOURCE_CATALOG.find(s => s.connector_id === c.connector_id);
+            const meta = metaFor(c.connector_id);
             const isExpanded = expandedId === c.connector_id;
 
             return (
@@ -820,6 +896,12 @@ function DataSourcesSection() {
                         fields={meta.inputFields}
                         loading={loading && connectingId === c.connector_id}
                         onSubmit={(req) => handleConnect(c.connector_id, req)}
+                      />
+                    )}
+                    {c.connector_id === 'gmail_imap' && (
+                      <GmailOAuthAdvanced
+                        loading={loading && connectingId === 'gmail'}
+                        onConnect={(req) => handleConnect('gmail', req)}
                       />
                     )}
                     {meta?.troubleshooting && (

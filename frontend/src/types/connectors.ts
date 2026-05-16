@@ -73,13 +73,16 @@ export const SOURCE_CATALOG: ConnectorMeta[] = [
   },
   // ── Communication ──────────────────────────────────────────────────
   {
+    // Unified Gmail card. Defaults to the IMAP (app-password) flow because
+    // it needs no Google Cloud setup; the OAuth path is offered as an
+    // "Advanced" disclosure rendered in DataSourcesPage.
     connector_id: 'gmail_imap',
-    display_name: 'Gmail (IMAP)',
+    display_name: 'Gmail',
     auth_type: 'oauth',
     category: 'communication',
     icon: 'Mail',
     color: 'text-red-400',
-    description: 'Connect with email + app password \u2014 no Google Cloud setup',
+    description: 'Email messages and threads',
     unitLabel: 'emails',
     steps: [
       {
@@ -91,7 +94,6 @@ export const SOURCE_CATALOG: ConnectorMeta[] = [
     troubleshooting: [
       "Don't see App Passwords? Make sure 2-Step Verification is enabled first.",
       "Google Workspace user? Your admin may need to enable App Passwords for your organization.",
-      "Prefer OAuth? Use the regular Gmail connector instead.",
     ],
     inputFields: [
       { name: 'email', placeholder: 'you@gmail.com', type: 'text' },

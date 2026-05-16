@@ -392,6 +392,14 @@ function GmailOAuthAdvanced({
 // ---------------------------------------------------------------------------
 
 // Sync status display component with progress bar
+function formatEta(seconds: number): string | null {
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  if (seconds < 60) return `~${Math.round(seconds)} sec remaining`;
+  if (seconds < 3600) return `~${Math.round(seconds / 60)} min remaining`;
+  if (seconds < 86400) return `~${Math.round(seconds / 3600)} hr remaining`;
+  return 'more than a day remaining';
+}
+
 function SyncStatusDisplay({
   chunks,
   sync,
@@ -407,6 +415,22 @@ function SyncStatusDisplay({
 }) {
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState('');
+
+  // Baseline observation used to project ETA. Captured the first time we
+  // see this connector in the `syncing` state, cleared whenever it leaves
+  // that state. (items/sec is computed from items_synced delta since
+  // baseline, not from total elapsed sync time, so the estimate reflects
+  // the user's perceived progress rather than the full historical rate.)
+  const baselineRef = useRef<{ ts: number; items: number } | null>(null);
+  useEffect(() => {
+    if (sync?.state === 'syncing') {
+      if (baselineRef.current === null) {
+        baselineRef.current = { ts: Date.now(), items: sync.items_synced ?? 0 };
+      }
+    } else {
+      baselineRef.current = null;
+    }
+  }, [sync?.state]);
 
   const handleSync = async () => {
     setSyncing(true);
@@ -474,18 +498,41 @@ function SyncStatusDisplay({
 
   // Actively syncing
   if (sync?.state === 'syncing' || syncing) {
-    const pct = sync?.items_total && sync.items_total > 0
-      ? Math.round((sync.items_synced / sync.items_total) * 100)
-      : null;
-    const label = sync?.items_total && sync.items_total > 0
-      ? `${sync.items_synced.toLocaleString()} / ${sync.items_total.toLocaleString()}`
-      : sync?.items_synced && sync.items_synced > 0
-        ? `${sync.items_synced.toLocaleString()} items so far`
+    const hasTotal = !!(sync?.items_total && sync.items_total > 0);
+    const itemsSynced = sync?.items_synced ?? 0;
+    const itemsTotal = sync?.items_total ?? 0;
+    const pct = hasTotal ? Math.round((itemsSynced / itemsTotal) * 100) : null;
+
+    // Project remaining time using items/sec since we first observed this
+    // sync running. Require at least 5s of observation and a non-zero
+    // delta so we don't surface a nonsense ETA in the first few seconds.
+    let etaLabel: string | null = null;
+    if (hasTotal && baselineRef.current) {
+      const elapsedSec = (Date.now() - baselineRef.current.ts) / 1000;
+      const delta = itemsSynced - baselineRef.current.items;
+      if (elapsedSec > 5 && delta > 0) {
+        const rate = delta / elapsedSec;
+        const remaining = Math.max(0, itemsTotal - itemsSynced);
+        etaLabel = formatEta(remaining / rate);
+      }
+    }
+
+    const countPart = hasTotal
+      ? `${itemsSynced.toLocaleString()} / ${itemsTotal.toLocaleString()}${pct != null ? ` (${pct}%)` : ''}`
+      : itemsSynced > 0
+        ? `${itemsSynced.toLocaleString()} items so far`
         : 'Starting...';
+
     return (
       <div>
         <div style={{ fontSize: 11, color: 'var(--color-warning)', marginBottom: 4 }}>
-          Syncing — {label}
+          Syncing —{' '}
+          <span key={itemsSynced} className="sync-bump">
+            {countPart}
+          </span>
+          {etaLabel && (
+            <span style={{ color: 'var(--color-text-tertiary)' }}> · {etaLabel}</span>
+          )}
         </div>
         <div style={{
           height: 4, borderRadius: 2,

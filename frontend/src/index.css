@@ -718,6 +718,16 @@
   animation: openjarvis-research-shimmer 1.6s ease-in-out infinite;
 }
 
+/* Sync progress pulse — fires on each items_synced bump so the
+   "12,450 / 99,840" label visibly breathes between polls. */
+@keyframes openjarvis-sync-bump {
+  0% { opacity: 0.55; }
+  100% { opacity: 1; }
+}
+.sync-bump {
+  animation: openjarvis-sync-bump 400ms ease-out;
+}
+
 /* Deep Research inline citation pills — small rounded chips that flow
    with the surrounding text and link out to the cited email. */
 .research-citation {

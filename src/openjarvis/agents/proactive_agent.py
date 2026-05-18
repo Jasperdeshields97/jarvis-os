@@ -67,7 +67,11 @@ Each action object must have these fields:
   - action_type: one of email_delete | email_archive | sms_send | sms_draft_reply |
                  calendar_decline | calendar_accept | no_action
   - description: human-readable sentence explaining what you will do
-  - payload: dict with the data needed to execute (message_id, contact, body, event_id, etc.)
+  - payload: dict with the data needed to execute. ALWAYS include:
+      - doc_id: the full doc_id from the source data (e.g. "gmail:abc123", "gcalendar:xyz")
+      - For email actions: message_id (the raw Gmail message ID)
+      - For sms actions: contact (phone/email), body (the message text)
+      - For calendar actions: event_id, calendar_id (default "primary")
   - permission_key: pattern string like "email_delete:domain:noreply.github.com"
   - tier: one of trivial | low | medium | high
   - reasoning: one sentence why
@@ -103,6 +107,73 @@ def _extract_json_block(text: str) -> Optional[List[Dict[str, Any]]]:
         return None
 
 
+def _build_notification_channel(channel_spec: str) -> Optional[Any]:
+    """Parse a ``"type:identifier"`` string into a channel backend instance.
+
+    Supports:
+      ``imessage:+15551234567``  — sends via AppleScript directly
+      ``telegram:123456789``     — instantiates TelegramChannel
+      ``slack:D0123456789``      — instantiates registered Slack channel
+      Any other type registered in ChannelRegistry
+
+    Returns ``None`` (silently) if the spec is empty or the channel can't
+    be instantiated so the agent degrades gracefully to no notifications.
+    """
+    if not channel_spec or ":" not in channel_spec:
+        return None
+
+    channel_type, _, channel_id = channel_spec.partition(":")
+
+    # iMessage: wrap send_imessage() in a minimal BaseChannel-compatible shim
+    if channel_type == "imessage":
+        from openjarvis.channels._stubs import BaseChannel, ChannelMessage, ChannelStatus
+
+        class _IMessageShim(BaseChannel):
+            channel_id = "imessage"
+
+            def __init__(self, handle: str) -> None:
+                self._handle = handle
+
+            def connect(self) -> None:
+                pass
+
+            def disconnect(self) -> None:
+                pass
+
+            def send(self, channel: str, content: str, *, conversation_id: str = "") -> bool:
+                from openjarvis.channels.imessage_daemon import send_imessage
+                return send_imessage(self._handle, content)
+
+            def status(self) -> ChannelStatus:
+                return ChannelStatus.CONNECTED
+
+            def list_channels(self) -> List[str]:
+                return [self._handle]
+
+            def on_message(self, handler: Any) -> None:
+                pass
+
+        return _IMessageShim(channel_id)
+
+    # All other channel types: look up in ChannelRegistry
+    try:
+        import openjarvis.channels  # noqa: F401  trigger registration
+        from openjarvis.core.registry import ChannelRegistry
+
+        if ChannelRegistry.contains(channel_type):
+            channel_cls = ChannelRegistry.get(channel_type)
+            instance = channel_cls()
+            try:
+                instance.connect()
+            except Exception:
+                pass
+            return instance
+    except Exception:
+        pass
+
+    return None
+
+
 @AgentRegistry.register("proactive")
 class ProactiveAgent(ToolUsingAgent):
     """Autonomous agent that handles routine tasks based on learned user behavior."""
@@ -114,45 +185,55 @@ class ProactiveAgent(ToolUsingAgent):
         self._hours_back: int = kwargs.pop("hours_back", 24)
         self._approval_store: Optional[ApprovalStore] = kwargs.pop("approval_store", None)
         self._timezone: str = kwargs.pop("timezone", "America/Los_Angeles")
-        super().__init__(*args, **kwargs)
 
-        # Fall back to config.toml [proactive] section if not explicitly set
-        if not self._notification_channel_id:
-            try:
-                cfg = load_config()
-                p = cfg.proactive
+        # Read config defaults before super().__init__ so we can inject tools
+        try:
+            cfg = load_config()
+            p = cfg.proactive
+            if not self._notification_channel_id:
                 self._notification_channel_id = p.notification_channel
                 self._hours_back = p.hours_back
                 self._timezone = p.timezone
-            except Exception:
-                pass
-
-    def _get_already_seen_ids(self, store: ApprovalStore) -> Set[str]:
-        """Return doc_ids already present in the approval store (any status).
-
-        Prevents re-proposing items that were already queued, approved, denied,
-        or executed in a previous run — even if they're still technically unread.
-        The doc_id is stored in payload["doc_id"] when the LLM includes it.
-        """
-        seen: Set[str] = set()
-        try:
-            conn = store._conn
-            rows = conn.execute("SELECT payload FROM pending_actions").fetchall()
-            for (payload_json,) in rows:
-                try:
-                    payload = json.loads(payload_json) if payload_json else {}
-                    doc_id = payload.get("doc_id", "")
-                    if doc_id:
-                        seen.add(doc_id)
-                    # Also track raw message_ids for Gmail
-                    msg_id = payload.get("message_id", "")
-                    if msg_id:
-                        seen.add(f"gmail:{msg_id}")
-                except (json.JSONDecodeError, KeyError):
-                    pass
         except Exception:
             pass
-        return seen
+
+        # Build the required tools and inject them into the executor.
+        # This must happen before super().__init__ is called because
+        # ToolUsingAgent builds the ToolExecutor from kwargs["tools"].
+        store = self._approval_store or get_store()
+        self._approval_store = store
+
+        notification_channel = _build_notification_channel(self._notification_channel_id)
+        self._notification_channel = notification_channel
+
+        from openjarvis.tools.channel_tools import ChannelSendTool
+        from openjarvis.tools.digest_collect import DigestCollectTool
+        from openjarvis.tools.proactive_tools import (
+            CheckPermissionTool,
+            ExecutePendingActionsTool,
+            GetPendingActionsTool,
+            QueueActionTool,
+            RecordDecisionTool,
+        )
+
+        proactive_tools = [
+            DigestCollectTool(),
+            ExecutePendingActionsTool(store=store),
+            ChannelSendTool(channel=notification_channel),
+            CheckPermissionTool(store=store),
+            QueueActionTool(store=store),
+            GetPendingActionsTool(store=store),
+            RecordDecisionTool(store=store),
+        ]
+
+        # Merge with any tools passed by the caller
+        caller_tools: List[Any] = kwargs.pop("tools", None) or []
+        kwargs["tools"] = proactive_tools + caller_tools
+
+        super().__init__(*args, **kwargs)
+
+    def _get_already_seen_ids(self, store: ApprovalStore) -> Set[str]:
+        return store.get_seen_ids()
 
     def _store(self) -> ApprovalStore:
         if self._approval_store is None:

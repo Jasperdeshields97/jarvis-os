@@ -110,6 +110,16 @@ def _slack_api_users_list(token: str) -> Dict[str, Any]:
     return _slack_api_with_retry("users.list", token)
 
 
+def _slack_api_auth_test(token: str) -> Dict[str, Any]:
+    """Call the Slack ``auth.test`` endpoint.
+
+    Returns workspace context (``team_id``, ``team``, ``url``) used to
+    construct message permalinks — the workspace subdomain isn't carried
+    by any other endpoint we already call.
+    """
+    return _slack_api_with_retry("auth.test", token)
+
+
 def _slack_api_with_retry(
     method: str,
     token: str,
@@ -180,9 +190,32 @@ def _ts_to_datetime(ts: str) -> datetime:
         return datetime.now()
 
 
-def _slack_archive_url(team_id: str, channel_id: str, ts: str) -> str:
-    """Build a Slack message archive URL from team, channel, and timestamp."""
+def _team_domain_from_auth(auth_resp: Dict[str, Any]) -> str:
+    """Derive the workspace subdomain ('acme' from 'https://acme.slack.com/').
+
+    Falls back to the ``team_id`` so doc_ids stay non-empty when the
+    workspace ``url`` is missing — losing the workspace breaks permalinks
+    but lets ingestion continue.
+    """
+    workspace_url: str = (auth_resp.get("url") or "").rstrip("/")
+    if workspace_url:
+        host = workspace_url.split("//", 1)[-1].split("/", 1)[0]
+        suffix = ".slack.com"
+        if host.endswith(suffix):
+            return host[: -len(suffix)]
+    return auth_resp.get("team_id", "") or ""
+
+
+def _slack_archive_url(team_domain: str, channel_id: str, ts: str) -> str:
+    """Build a Slack message permalink for ``team_domain``/``channel``/``ts``.
+
+    With a workspace subdomain the link resolves directly; without one we
+    fall back to ``slack.com/archives/...`` which Slack redirects only for
+    logged-in members of that workspace.
+    """
     ts_clean = ts.replace(".", "")
+    if team_domain:
+        return f"https://{team_domain}.slack.com/archives/{channel_id}/p{ts_clean}"
     return f"https://slack.com/archives/{channel_id}/p{ts_clean}"
 
 
@@ -274,6 +307,18 @@ class SlackConnector(BaseConnector):
         if not token:
             return
 
+        # Step 0: resolve workspace context — the subdomain is needed for
+        # message permalinks and is the only piece of state that doesn't
+        # come back from conversations.history. Done once per sync.
+        try:
+            auth_resp = _slack_api_auth_test(token)
+        except Exception:  # noqa: BLE001 — best-effort; permalinks degrade
+            auth_resp = {}
+        team_domain: str = _team_domain_from_auth(auth_resp)
+        team_id: str = auth_resp.get("team_id", "") or ""
+        workspace_name: str = auth_resp.get("team", "") or ""
+        workspace_url: str = auth_resp.get("url", "") or ""
+
         # Step 1: build user map
         users_resp = _slack_api_users_list(token)
         members: List[Dict[str, Any]] = users_resp.get("members", [])
@@ -342,26 +387,48 @@ class SlackConnector(BaseConnector):
                         thread_ts: Optional[str] = msg.get("thread_ts")
 
                         user_info = user_map.get(user_id, {})
-                        author = user_info.get("name", user_id)
+                        author_name: str = user_info.get("name", user_id)
+                        author_email: str = user_info.get("email", "")
 
                         timestamp = _ts_to_datetime(ts)
-                        url = _slack_archive_url("", chan_id, ts)
+                        url = _slack_archive_url(team_domain, chan_id, ts)
+
+                        # v1 schema participants: lowercase email when we
+                        # have one, else the display name — matches the
+                        # Gmail connector's contract (one identity per
+                        # participant) so cross-source queries work.
+                        canonical = (author_email or author_name).lower()
+                        participants = [canonical] if canonical else []
+                        participants_raw = [user_id] if user_id else []
+
+                        # Encode workspace into doc_id so research_loop
+                        # can rebuild a workspace-qualified permalink from
+                        # source + document_id alone (the only context
+                        # _hit_url() receives).
+                        doc_id = f"slack:{team_domain}:{chan_id}:{ts}"
 
                         doc = Document(
-                            doc_id=f"slack:{chan_id}:{ts}",
+                            doc_id=doc_id,
                             source="slack",
                             doc_type="message",
                             content=text,
                             title=f"#{chan_name}",
-                            author=author,
+                            author=author_email or author_name,
+                            participants=participants,
+                            participants_raw=participants_raw,
                             timestamp=timestamp,
                             thread_id=thread_ts,
+                            channel=chan_name,
                             url=url,
                             metadata={
                                 "channel_id": chan_id,
                                 "channel_name": chan_name,
                                 "user_id": user_id,
                                 "ts": ts,
+                                "team_id": team_id,
+                                "team_domain": team_domain,
+                                "workspace_name": workspace_name,
+                                "workspace_url": workspace_url,
                             },
                         )
                         synced += 1

@@ -51,6 +51,15 @@ _USERS_RESPONSE = {
     ],
 }
 
+_AUTH_TEST_RESPONSE = {
+    "ok": True,
+    "team_id": "T0ACME",
+    "team": "Acme",
+    "url": "https://acme.slack.com/",
+    "user": "bot",
+    "user_id": "UBOT",
+}
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -104,6 +113,7 @@ def test_auth_url(connector) -> None:
 # ---------------------------------------------------------------------------
 
 
+@patch("openjarvis.connectors.slack_connector._slack_api_auth_test")
 @patch("openjarvis.connectors.slack_connector._slack_api_conversations_list")
 @patch("openjarvis.connectors.slack_connector._slack_api_conversations_history")
 @patch("openjarvis.connectors.slack_connector._slack_api_users_list")
@@ -111,6 +121,7 @@ def test_sync_yields_documents(
     mock_users,
     mock_history,
     mock_channels,
+    mock_auth,
     connector,
     tmp_path: Path,
 ) -> None:
@@ -123,6 +134,7 @@ def test_sync_yields_documents(
     creds_path.write_text(json.dumps({"token": "fake-access-token"}), encoding="utf-8")
 
     # Configure mocks
+    mock_auth.return_value = _AUTH_TEST_RESPONSE
     mock_users.return_value = _USERS_RESPONSE
     mock_channels.return_value = _CHANNELS_RESPONSE
     mock_history.return_value = _HISTORY_RESPONSE
@@ -137,29 +149,43 @@ def test_sync_yields_documents(
         assert doc.source == "slack"
         assert doc.doc_type == "message"
 
-    # Check a specific document from #general
+    # Check a specific document from #general — doc_id encodes the
+    # workspace subdomain so research_loop can rebuild the permalink.
     doc_c001 = next(
-        (d for d in docs if d.doc_id == "slack:C001:1710500000.000100"), None
+        (d for d in docs if d.doc_id == "slack:acme:C001:1710500000.000100"),
+        None,
     )
     assert doc_c001 is not None
     assert doc_c001.title == "#general"
-    assert doc_c001.author == "Alice"
+    assert doc_c001.author == "alice@co.com"
     assert doc_c001.content == "Let's discuss the API redesign."
     assert doc_c001.thread_id == "1710500000.000100"
+    # v1 schema fields
+    assert doc_c001.participants == ["alice@co.com"]
+    assert doc_c001.participants_raw == ["U001"]
+    assert doc_c001.channel == "general"
+    assert doc_c001.url == (
+        "https://acme.slack.com/archives/C001/p1710500000000100"
+    )
     assert doc_c001.metadata["channel_id"] == "C001"
     assert doc_c001.metadata["channel_name"] == "general"
+    assert doc_c001.metadata["team_id"] == "T0ACME"
+    assert doc_c001.metadata["team_domain"] == "acme"
 
     # Check a specific document from #engineering
     doc_c002 = next(
-        (d for d in docs if d.doc_id == "slack:C002:1710500060.000200"), None
+        (d for d in docs if d.doc_id == "slack:acme:C002:1710500060.000200"),
+        None,
     )
     assert doc_c002 is not None
     assert doc_c002.title == "#engineering"
-    assert doc_c002.author == "Bob"
+    assert doc_c002.author == "bob@co.com"
     assert doc_c002.content == "Sounds good, I'll prepare a doc."
     assert doc_c002.thread_id is None
+    assert doc_c002.channel == "engineering"
 
     # Verify the API was called correctly
+    mock_auth.assert_called_once()
     mock_users.assert_called_once()
     assert mock_channels.call_count == 1
     # conversations.history called once per channel (2 channels)
@@ -213,3 +239,71 @@ def test_registry() -> None:
     assert ConnectorRegistry.contains("slack")
     cls = ConnectorRegistry.get("slack")
     assert cls.connector_id == "slack"
+
+
+# ---------------------------------------------------------------------------
+# Test 8 — end-to-end: connector → pipeline → KnowledgeStore → HybridSearch
+# ---------------------------------------------------------------------------
+
+
+@patch("openjarvis.connectors.slack_connector._slack_api_auth_test")
+@patch("openjarvis.connectors.slack_connector._slack_api_conversations_list")
+@patch("openjarvis.connectors.slack_connector._slack_api_conversations_history")
+@patch("openjarvis.connectors.slack_connector._slack_api_users_list")
+def test_end_to_end_ingest_and_search(
+    mock_users,
+    mock_history,
+    mock_channels,
+    mock_auth,
+    connector,
+    tmp_path: Path,
+) -> None:
+    """Synced Slack messages are searchable via HybridSearch with v1 fields.
+
+    Lexical-only path (no embedder) so this stays a pure unit test — no
+    Ollama daemon needed. Confirms the v1 contract end-to-end: source,
+    namespaced thread_id, channel, participants, and a workspace-qualified
+    permalink all survive ingest → store → hit.
+    """
+    from openjarvis.connectors.hybrid_search import HybridSearch  # noqa: PLC0415
+    from openjarvis.connectors.pipeline import IngestionPipeline  # noqa: PLC0415
+    from openjarvis.connectors.store import KnowledgeStore  # noqa: PLC0415
+
+    creds_path = Path(connector._credentials_path)
+    creds_path.write_text(json.dumps({"token": "fake-token"}), encoding="utf-8")
+    mock_auth.return_value = _AUTH_TEST_RESPONSE
+    mock_users.return_value = _USERS_RESPONSE
+    mock_channels.return_value = _CHANNELS_RESPONSE
+    mock_history.return_value = _HISTORY_RESPONSE
+
+    store = KnowledgeStore(db_path=tmp_path / "slack_e2e.db")
+    pipeline = IngestionPipeline(store)
+    chunks_stored = pipeline.ingest(connector.sync())
+
+    # 4 short messages → 4 chunks (no chunk splitting at this length).
+    assert chunks_stored == 4
+
+    hybrid = HybridSearch(store)
+    hits = hybrid.search("API redesign", limit=5)
+    assert len(hits) >= 1
+
+    target = next(
+        (h for h in hits if "API redesign" in h.content_snippet),
+        None,
+    )
+    assert target is not None
+    assert target.source == "slack"
+    assert target.title == "#general"
+    # Thread id is namespaced by the pipeline.
+    assert target.thread_id == "slack:1710500000.000100"
+    assert target.participants == ["alice@co.com"]
+    # The stored doc_id flows through the hit and is the format the
+    # research-loop URL builder expects.
+    assert target.document_id == "slack:acme:C001:1710500000.000100"
+
+    # And the research-loop builder reconstructs the workspace permalink.
+    from openjarvis.agents.research_loop import _hit_url  # noqa: PLC0415
+
+    assert _hit_url(target.source, target.document_id) == (
+        "https://acme.slack.com/archives/C001/p1710500000000100"
+    )

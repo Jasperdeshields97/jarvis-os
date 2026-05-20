@@ -1013,8 +1013,8 @@ class ProactiveConfig:
     """Proactive agent — autonomous action scheduling and approval routing."""
 
     enabled: bool = False
-    schedule: str = "0 5 * * *"         # cron expression (default: 5am daily)
-    hours_back: int = 24                 # how many hours of unacted items to scan
+    schedule: str = "0 5 * * *"  # cron expression (default: 5am daily)
+    hours_back: int = 24  # how many hours of unacted items to scan
     timezone: str = "America/Los_Angeles"
     # Channel to send approval notifications and receive yes/no replies.
     # Format: "{type}:{id}", e.g. "imessage:+15551234567" or "telegram:123456789"

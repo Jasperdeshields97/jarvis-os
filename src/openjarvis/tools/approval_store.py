@@ -19,7 +19,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-
 # ---------------------------------------------------------------------------
 # Decision constants
 # ---------------------------------------------------------------------------
@@ -35,10 +34,10 @@ STATUS_EXPIRED = "expired"
 STATUS_EXECUTED = "executed"
 
 # Tiers govern default ask behavior
-TIER_TRIVIAL = "trivial"   # Execute immediately, no ask
-TIER_LOW = "low"           # Ask once, then remember
-TIER_MEDIUM = "medium"     # Ask each time unless remembered
-TIER_HIGH = "high"         # Always ask, never auto-remember
+TIER_TRIVIAL = "trivial"  # Execute immediately, no ask
+TIER_LOW = "low"  # Ask once, then remember
+TIER_MEDIUM = "medium"  # Ask each time unless remembered
+TIER_HIGH = "high"  # Always ask, never auto-remember
 
 
 @dataclass
@@ -75,8 +74,17 @@ class PendingAction:
     @classmethod
     def from_row(cls, row: tuple) -> PendingAction:
         (
-            id_, action_type, description, payload_json, permission_key,
-            tier, status, created_at, expires_at, notification_sent, decision_at,
+            id_,
+            action_type,
+            description,
+            payload_json,
+            permission_key,
+            tier,
+            status,
+            created_at,
+            expires_at,
+            notification_sent,
+            decision_at,
         ) = row
         return cls(
             id=id_,
@@ -98,7 +106,7 @@ class PermissionRule:
     """A remembered user decision for a permission pattern."""
 
     permission_key: str
-    decision: str           # always_approve | always_deny
+    decision: str  # always_approve | always_deny
     times_approved: int = 0
     times_denied: int = 0
     last_updated: str = ""
@@ -116,7 +124,14 @@ class PermissionRule:
 
     @classmethod
     def from_row(cls, row: tuple) -> PermissionRule:
-        permission_key, decision, times_approved, times_denied, last_updated, notes = row
+        (
+            permission_key,
+            decision,
+            times_approved,
+            times_denied,
+            last_updated,
+            notes,
+        ) = row
         return cls(
             permission_key=permission_key,
             decision=decision,
@@ -198,10 +213,17 @@ class ApprovalStore:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                action.id, action.action_type, action.description,
-                json.dumps(action.payload), action.permission_key, action.tier,
-                action.status, action.created_at, action.expires_at,
-                int(action.notification_sent), action.decision_at,
+                action.id,
+                action.action_type,
+                action.description,
+                json.dumps(action.payload),
+                action.permission_key,
+                action.tier,
+                action.status,
+                action.created_at,
+                action.expires_at,
+                int(action.notification_sent),
+                action.decision_at,
             ),
         )
         self._conn.commit()
@@ -222,7 +244,8 @@ class ApprovalStore:
         rows = self._conn.execute(
             "SELECT id, action_type, description, payload, permission_key, "
             "tier, status, created_at, expires_at, notification_sent, decision_at "
-            "FROM pending_actions WHERE status = ? AND expires_at > ? ORDER BY created_at",
+            "FROM pending_actions WHERE status = ? AND expires_at > ? "
+            "ORDER BY created_at",
             (STATUS_PENDING, now),
         ).fetchall()
         return [PendingAction.from_row(r) for r in rows]
@@ -297,18 +320,28 @@ class ApprovalStore:
                 "UPDATE permission_memory SET decision = ?, times_approved = ?, "
                 "times_denied = ?, last_updated = ?, notes = ? "
                 "WHERE permission_key = ?",
-                (decision, times_approved, times_denied, now, notes or existing.notes, permission_key),
+                (
+                    decision,
+                    times_approved,
+                    times_denied,
+                    now,
+                    notes or existing.notes,
+                    permission_key,
+                ),
             )
         else:
             self._conn.execute(
                 "INSERT INTO permission_memory "
-                "(permission_key, decision, times_approved, times_denied, last_updated, notes) "
+                "(permission_key, decision, times_approved, times_denied, "
+                "last_updated, notes) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (
-                    permission_key, decision,
+                    permission_key,
+                    decision,
                     1 if approved else 0,
                     0 if approved else 1,
-                    now, notes,
+                    now,
+                    notes,
                 ),
             )
         self._conn.commit()

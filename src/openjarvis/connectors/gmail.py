@@ -181,9 +181,28 @@ class _HTMLTextExtractor(HTMLParser):
 
     _SKIP_TAGS = {"script", "style", "head", "title", "meta", "link"}
     _BLOCK_TAGS = {
-        "p", "div", "br", "li", "ul", "ol", "tr", "td", "table",
-        "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "hr",
-        "article", "section", "header", "footer", "pre",
+        "p",
+        "div",
+        "br",
+        "li",
+        "ul",
+        "ol",
+        "tr",
+        "td",
+        "table",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "blockquote",
+        "hr",
+        "article",
+        "section",
+        "header",
+        "footer",
+        "pre",
     }
 
     def __init__(self) -> None:
@@ -191,9 +210,7 @@ class _HTMLTextExtractor(HTMLParser):
         self._parts: List[str] = []
         self._skip_depth = 0
 
-    def handle_starttag(
-        self, tag: str, attrs: List[Tuple[str, Optional[str]]]
-    ) -> None:
+    def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
         if tag in self._SKIP_TAGS:
             self._skip_depth += 1
         elif tag in self._BLOCK_TAGS and self._skip_depth == 0:

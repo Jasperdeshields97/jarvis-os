@@ -361,7 +361,7 @@ class GmailConnector(BaseConnector):
         delete_tokens(self._credentials_path)
 
     def auth_url(self) -> str:
-        """Return a Google OAuth consent URL requesting ``gmail.readonly`` scope."""
+        """Return a Google OAuth consent URL for the shared Google scopes."""
         return build_google_auth_url(
             client_id="",  # placeholder — real client_id from config
             scopes=GOOGLE_ALL_SCOPES,
@@ -404,8 +404,6 @@ class GmailConnector(BaseConnector):
         tokens = load_tokens(self._credentials_path)
         if not tokens or not (tokens.get("token") or tokens.get("access_token")):
             return
-        if not (tokens.get("access_token") or tokens.get("token")):
-            return
 
         # Default to no filter so SENT, labeled, and category-tabbed mail
         # all flow in. The previous "category:primary" default excluded
@@ -415,6 +413,8 @@ class GmailConnector(BaseConnector):
         if since is not None:
             # Gmail's after: operator accepts Unix epoch seconds.
             query_parts.append(f"after:{int(since.timestamp())}")
+        if query_extra:
+            query_parts.append(query_extra)
         query = " ".join(query_parts)
 
         page_token: Optional[str] = cursor

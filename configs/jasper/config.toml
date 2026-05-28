@@ -7,20 +7,12 @@
 #   BUSINESS — Comeback Code engine + Vitalize supplements
 #   BRAND    — IG / TikTok / YouTube / UGC / brand deals
 
-# ═══════════════════════════════════════════════════════
-# INTELLIGENCE — Model
-# ═══════════════════════════════════════════════════════
-
 [intelligence]
-default_model = "claude-haiku-4-5"     # Fast + cheap for agent/digest tasks
-fallback_model = "claude-sonnet-4-6"   # Escalate for complex reasoning
+default_model = "claude-haiku-4-5"
+fallback_model = "claude-sonnet-4-6"
 provider = "anthropic"
 temperature = 0.3
 max_tokens = 4096
-
-# ═══════════════════════════════════════════════════════
-# ENGINE — Inference runtime
-# ═══════════════════════════════════════════════════════
 
 [engine]
 default = "anthropic"
@@ -28,18 +20,10 @@ default = "anthropic"
 [engine.anthropic]
 api_key = "${ANTHROPIC_API_KEY}"
 
-# ═══════════════════════════════════════════════════════
-# AGENT — Agentic harness
-# ═══════════════════════════════════════════════════════
-
 [agent]
 default_agent = "orchestrator"
 max_turns = 20
 context_from_memory = true
-
-# ═══════════════════════════════════════════════════════
-# TOOLS
-# ═══════════════════════════════════════════════════════
 
 [tools]
 enabled = [
@@ -61,18 +45,10 @@ db_path = "/root/.openjarvis/memory.db"
 [tools.mcp]
 enabled = true
 
-# ═══════════════════════════════════════════════════════
-# SERVER — API + webchat (dashboard Command tab)
-# ═══════════════════════════════════════════════════════
-
 [server]
 host = "0.0.0.0"
-port = 8001                            # 8000 may conflict — use 8001
+port = 8001
 agent = "orchestrator"
-
-# ═══════════════════════════════════════════════════════
-# CHANNELS
-# ═══════════════════════════════════════════════════════
 
 [channel.telegram]
 enabled = true
@@ -80,61 +56,48 @@ bot_token = "${JARVIS_TELEGRAM_BOT_TOKEN}"
 allowed_users = ["${JASPER_TELEGRAM_USER_ID}"]
 
 [channel.webchat]
-enabled = true                         # Powers dashboard Command tab via WebSocket
-
-# ═══════════════════════════════════════════════════════
-# MORNING DIGEST — 6AM EST daily
-# Sections map to the three pillars:
-#   health   → LIFE (fitness)
-#   calendar → LIFE (schedule)
-#   messages → BUSINESS (gmail + github)
-#   world    → ambient (weather)
-# ═══════════════════════════════════════════════════════
+enabled = true
 
 [digest]
 enabled = true
-schedule = "0 11 * * *"               # 06:00 EST = 11:00 UTC
+schedule = "0 11 * * *"
 timezone = "America/New_York"
 persona = "jarvis"
 honorific = "boss"
-tts_backend = "none"                   # Text to Telegram — no voice for now
+tts_backend = "none"
 sections = ["health", "calendar", "messages", "world"]
 
 [digest.health]
-sources = ["strava"]                   # Yesterday's workout + weekly totals
+sources = ["whoop"]
 max_items = 3
 
 [digest.calendar]
-sources = ["gcalendar"]               # Today's events
+sources = ["gcalendar"]
 max_items = 8
 
 [digest.messages]
 sources = ["gmail", "github_notifications"]
 max_items = 10
 priority_contacts = [
-  "jasperdeshields1@gmail.com",       # Self (important threads)
+  "jasperdeshields1@gmail.com",
 ]
 
 [digest.world]
 sources = ["weather"]
 max_items = 1
 
-# ═══════════════════════════════════════════════════════
-# CONNECTORS
-# ═══════════════════════════════════════════════════════
-
-# LIFE pillar
-[connectors.strava]
-client_id     = "${STRAVA_CLIENT_ID}"
-client_secret = "${STRAVA_CLIENT_SECRET}"
-refresh_token = "${STRAVA_REFRESH_TOKEN}"
+# LIFE pillar — WHOOP (replaces Strava)
+[connectors.whoop]
+client_id     = "${WHOOP_CLIENT_ID}"
+client_secret = "${WHOOP_CLIENT_SECRET}"
+refresh_token = "${WHOOP_REFRESH_TOKEN}"
 
 [connectors.weather]
-api_key          = "${OPENWEATHERMAP_API_KEY}"
+api_key          = "e2ab2c7df4fd346d3289ed54fb030619"
 default_location = "Newark, NJ"
 units            = "imperial"
 
-# LIFE + BUSINESS pillar (shared Google OAuth)
+# LIFE + BUSINESS pillar
 [connectors.gcalendar]
 credentials_path = "/root/.openjarvis/google_credentials.json"
 token_path       = "/root/.openjarvis/google_token.json"
@@ -153,10 +116,6 @@ watch_repos = [
   "Jasperdeshields97/comeback-quiz",
 ]
 
-# ═══════════════════════════════════════════════════════
-# LEARNING — Improves over time
-# ═══════════════════════════════════════════════════════
-
 [learning]
 enabled = true
 
@@ -167,37 +126,17 @@ policy = "heuristic"
 enabled = true
 
 [learning.optimize.personal]
-enabled = true                         # Builds model of Jasper's patterns
-
-# ═══════════════════════════════════════════════════════
-# MEMORY + TRACES
-# ═══════════════════════════════════════════════════════
-
-[tools.storage]
-default_backend = "sqlite"
-db_path = "/root/.openjarvis/memory.db"
+enabled = true
 
 [traces]
 enabled = true
 db_path = "/root/.openjarvis/traces.db"
 
-# ═══════════════════════════════════════════════════════
-# PERSONA
-# ═══════════════════════════════════════════════════════
-
 [prompt]
 persona = "jarvis"
 
-# ═══════════════════════════════════════════════════════
-# SECURITY
-# ═══════════════════════════════════════════════════════
-
 [security]
 enabled = true
-
-# ═══════════════════════════════════════════════════════
-# TELEMETRY (disabled — no external reporting)
-# ═══════════════════════════════════════════════════════
 
 [telemetry]
 enabled = false

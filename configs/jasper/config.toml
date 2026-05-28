@@ -52,8 +52,8 @@ agent = "orchestrator"
 
 [channel.telegram]
 enabled = true
-bot_token = "${JARVIS_TELEGRAM_BOT_TOKEN}"
-allowed_users = ["${JASPER_TELEGRAM_USER_ID}"]
+bot_token = "8912608130:AAH66JC_7h-VBAmpg77u8A2Etog1Y3mDAs4"
+allowed_users = ["6921774959"]
 
 [channel.webchat]
 enabled = true

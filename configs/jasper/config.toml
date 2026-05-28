@@ -88,9 +88,9 @@ max_items = 1
 
 # LIFE pillar — WHOOP (replaces Strava)
 [connectors.whoop]
-client_id     = "${WHOOP_CLIENT_ID}"
-client_secret = "${WHOOP_CLIENT_SECRET}"
-refresh_token = "${WHOOP_REFRESH_TOKEN}"
+client_id     = "4007a29e-3a93-4740-86f5-edb5e3bd3df8"
+client_secret = "aa7670ea7df7870207f13288c0f00f62e638087875caf854a41989cdc256a392"
+refresh_token = "ICoIBwHGYywbDnKH1I--tyOfjR8KkN8uS4IdpDQiPRE.xzPrzRYUgRylnP11An3OmQv5j04fkbFoMyGXGx4F4l0"
 
 [connectors.weather]
 api_key          = "e2ab2c7df4fd346d3289ed54fb030619"

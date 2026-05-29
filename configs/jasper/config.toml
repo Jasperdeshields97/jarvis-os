@@ -15,9 +15,9 @@ temperature = 0.3
 max_tokens = 4096
 
 [engine]
-default = "anthropic"
+default = "cloud"
 
-[engine.anthropic]
+[engine.cloud]
 api_key = "${ANTHROPIC_API_KEY}"
 
 [agent]
